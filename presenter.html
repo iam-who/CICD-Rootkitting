@@ -353,12 +353,16 @@
   <section id="ci">
     <div class="seclabel"><span class="no">04</span> See it run on GitHub Actions</div>
     <h2>The attack — and the defense — on real CI runners</h2>
-    <p>This isn't a local-only script. Fork the repo, enable Actions, and the
-      <code>supply-chain-demo</code> workflow runs the whole thing on GitHub-hosted runners
-      in three stages:</p>
+    <p>This isn't a local-only script. It runs on GitHub-hosted runners — here's how to watch it on your own account:</p>
+    <ol class="steps">
+      <li><b>Fork the repo.</b><small>Click Fork → Create fork. You get your own copy at github.com/&lt;you&gt;/CICD-Rootkitting.</small></li>
+      <li><b>Enable Actions on the fork.</b><small>Open the Actions tab and click "I understand my workflows, enable them" — forks have workflows off by default. One time only.</small></li>
+      <li><b>Trigger it.</b><small>Actions tab → select <code>supply-chain-demo</code> → Run workflow. Or just push any commit; it runs automatically.</small></li>
+    </ol>
+    <p>Then watch the three stages execute on real runners:</p>
     <ol class="steps">
       <li><b>Unit tests — source is clean.</b><small>The application's Go tests pass. There is nothing wrong in the repository.</small></li>
-      <li><b>Naive pipeline ships a backdoor.</b><small>SAST passes, the build succeeds, and it uploads a release artifact — built on GitHub's runner inside the "trusted" image, and backdoored. Download it from the run and <code>strings server | grep __backdoor__</code> to see it.</small></li>
+      <li><b>Naive pipeline ships a backdoor.</b><small>SAST passes, the build succeeds, and it uploads a release artifact — built on GitHub's runner inside the "trusted" image, and backdoored. Download it from the run's Artifacts and <code>strings server | grep __backdoor__</code> to see it.</small></li>
       <li><b>Hardened gate catches it.</b><small>An independent clean reference build plus the reproducible-build gate detect the hash mismatch and block the artifact before it could deploy.</small></li>
     </ol>
     <div class="beat">
