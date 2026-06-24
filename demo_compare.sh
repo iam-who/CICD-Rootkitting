@@ -26,7 +26,7 @@ echo "════════════════════════�
 echo ""
 echo "  Files committed to main:"
 cd "$SCRIPT_DIR/clean_app"
-find . -not -path './.git/*' -not -name '.git' -type f | sort | sed 's/^/    /'
+git ls-files | sed 's/^/    /'
 echo ""
 
 echo "  Searching source for backdoor strings..."
