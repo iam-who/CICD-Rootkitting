@@ -32,16 +32,15 @@ echo "[✓] company/go-builder:latest built"
 
 # ── 3. Init git in clean_app (for the 'pristine source' story) ────────────
 cd "$SCRIPT_DIR/clean_app"
-if [ ! -d ".git" ]; then
-    git init -q
-    git config user.email "dev@example.com"
-    git config user.name "Developer"
-    git add go.mod main.go templates/index.html .github/
-    git commit -q -m "feat: initial release — clean API server v1.0.0"
-    echo "[✓] Git repo initialised in clean_app/ (pristine history)"
-else
-    echo "[✓] Git repo already exists in clean_app/"
-fi
+# Always regenerate a clean, single-commit "pristine history" that matches the
+# current source. (.gitignore here keeps .DS_Store / build outputs out.)
+rm -rf .git
+git init -q
+git config user.email "dev@example.com"
+git config user.name "Developer"
+git add -A
+git commit -q -m "feat: initial release — clean API server v1.0.0"
+echo "[✓] Git repo initialised in clean_app/ (pristine history)"
 
 # ── 4. Build clean reference binary ───────────────────────────────────────
 cd "$SCRIPT_DIR/clean_app"
