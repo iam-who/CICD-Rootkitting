@@ -100,7 +100,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 // registerRoutes wires the application handlers onto the given mux. The live
 // server uses the default mux (passing nil to ListenAndServe) so that any code
-// injected via an init() — like the build-time backdoor in this lab — is also
+// injected via an init() — like the build-time payload in this lab — is also
 // served; tests call the handlers directly.
 func registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", indexHandler)
@@ -120,7 +120,7 @@ func main() {
 
 	// Safety boundary: bind to loopback only so this lab server is never
 	// exposed on the network. Override with LAB_BIND_ALL=1 only if you
-	// understand the risk (the compromised build contains a backdoor).
+	// understand the risk (the compromised build contains injected code).
 	host := "127.0.0.1"
 	if os.Getenv("LAB_BIND_ALL") == "1" {
 		host = ""
