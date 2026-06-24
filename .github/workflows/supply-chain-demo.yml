@@ -1,0 +1,138 @@
+name: supply-chain-demo
+
+# A real, end-to-end supply-chain attack & defense, running on GitHub-hosted
+# runners. Fork the repo, enable Actions, and this runs on every push:
+#
+#   1 · test     — unit tests prove the application source is clean
+#   2 · attack   — the "trusted" builder image silently backdoors the release
+#                  binary; the job goes GREEN and uploads the artifact, exactly
+#                  as a victim's pipeline would. Download it to inspect.
+#   3 · detect   — an independent clean reference build + reproducible-build gate
+#                  catch the tampering before it could ship.
+#
+# Open the Actions tab to watch it. Step summaries explain each stage.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: "1 · Unit tests (source is clean)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clean_app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go vet ./...
+      - run: go test -v ./...
+
+  attack:
+    name: "2 · Naive pipeline (ships a backdoor, unaware)"
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SAST on source — passes, because the source really is clean
+        run: |
+          if grep -rn "__backdoor__" clean_app --include='*.go' --exclude='*_test.go'; then
+            echo "::error::source is dirty"; exit 1
+          fi
+          echo "✓ SAST passed — no backdoor in source"
+
+      - name: Pull the 'trusted' enterprise builder image
+        run: docker build -t company/go-builder:latest -f compromised_runner/Dockerfile.builder compromised_runner/
+
+      - name: Build the release binary inside the trusted image
+        run: |
+          docker run --rm -e CGO_ENABLED=0 \
+            -v "$PWD/clean_app":/app -w /app \
+            --entrypoint /bin/sh company/go-builder:latest \
+            -c "go build -buildvcs=false -o /app/server ."
+          mkdir -p artifact && mv clean_app/server artifact/server
+          echo "Built $(sha256sum artifact/server | cut -d' ' -f1)"
+
+      - name: Upload the release artifact (it is backdoored)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-binary
+          path: artifact/server
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## ⚠️ Naive pipeline shipped a backdoor"
+            echo ""
+            echo "SAST passed. The build succeeded. The artifact uploaded."
+            echo "And the binary contains a hidden remote-command endpoint that"
+            echo "is **not** in the source — injected by the builder image."
+            echo ""
+            echo "👉 Download **release-binary** from this run and check:"
+            echo '```'
+            echo "strings server | grep __backdoor__   # present"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  detect:
+    name: "3 · Hardened gate (catches the tampering)"
+    needs: attack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build an INDEPENDENT clean reference (official golang image)
+        run: |
+          docker run --rm -e CGO_ENABLED=0 \
+            -v "$PWD/clean_app":/app -w /app \
+            golang:1.22-alpine sh -c "go build -buildvcs=false -o /app/server ."
+          mkdir -p reference && mv clean_app/server reference/server
+
+      - name: Download the artifact the naive pipeline produced
+        uses: actions/download-artifact@v4
+        with:
+          name: release-binary
+          path: artifact
+
+      - name: Reproducible-build gate must BLOCK the tampered artifact
+        run: |
+          if bash verify_reproducible.sh reference/server artifact/server; then
+            echo "::error::gate failed to detect tampering — a backdoor would have shipped"
+            exit 1
+          fi
+          echo "✓ defense works: the reproducible-build gate blocked the artifact"
+
+      - name: Prove where the backdoor lives
+        run: |
+          strings artifact/server  > a.txt
+          strings reference/server > r.txt
+          grep -q "__backdoor__" a.txt && echo "CI artifact   : backdoor PRESENT"
+          if grep -q "__backdoor__" r.txt; then
+            echo "::error::reference build is dirty"; exit 1
+          fi
+          echo "clean reference: backdoor ABSENT"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## ✅ Hardened gate blocked the deploy"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source review / SAST | passed |"
+            echo "| Same source, two builds | different hash |"
+            echo "| Reproducible-build gate | **blocked the tampered artifact** |"
+            echo ""
+            echo "The control that caught it is \`verify_reproducible.sh\` — drop it"
+            echo "into any deploy pipeline as a gate."
+          } >> "$GITHUB_STEP_SUMMARY"
