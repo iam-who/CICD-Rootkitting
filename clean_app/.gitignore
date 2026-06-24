@@ -1,0 +1,4 @@
+# Build outputs and OS cruft — keep the "pristine source" history clean
+.DS_Store
+server
+zz_metrics_init.go
