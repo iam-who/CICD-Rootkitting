@@ -1,8 +1,7 @@
+<p align="center"> <img src="assets/cyberacademy-logo.svg" alt="Cyber Academy" width="220"> </p>
 # CI/CD Rootkit Lab — *When the Build System Betrays You*
 
 [![supply-chain-demo](../../actions/workflows/supply-chain-demo.yml/badge.svg)](../../actions/workflows/supply-chain-demo.yml)
-
-<img width="1384" height="392" alt="image" src="https://github.com/user-attachments/assets/9bc396ee-5e71-4b6d-8af1-7aaa328f0097" />
 
 
 A small, self-contained lab that demonstrates a **build-time supply-chain attack** on a
