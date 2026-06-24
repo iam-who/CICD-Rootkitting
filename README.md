@@ -1,4 +1,20 @@
-<p align="center"> <img src="assets/cyberacademy-logo.svg" alt="Cyber Academy" width="220"> </p>
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/726d7c51-90da-493f-8776-701723b669cd" alt="Cyber Academy" width="250">
+</p>
+
+<h1 align="center">CI/CD Rootkit Lab</h1>
+
+<p align="center">
+  <strong>When the Build System Betrays You</strong>
+</p>
+
+<p align="center">
+  <a href="../../actions/workflows/supply-chain-demo.yml">
+    <img src="../../actions/workflows/supply-chain-demo.yml/badge.svg" alt="Build Status">
+  </a>
+</p>
+
+
 # CI/CD Rootkit Lab — *When the Build System Betrays You*
 
 [![supply-chain-demo](../../actions/workflows/supply-chain-demo.yml/badge.svg)](../../actions/workflows/supply-chain-demo.yml)
