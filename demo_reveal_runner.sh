@@ -1,0 +1,60 @@
+#!/bin/bash
+# demo_reveal_runner.sh — shows what's inside the "trusted" builder image
+
+echo ""
+echo "╔══════════════════════════════════════════════════════════════════╗"
+echo "║  REVEAL: Inside company/go-builder:latest                      ║"
+echo "╚══════════════════════════════════════════════════════════════════╝"
+echo ""
+echo "  What the CI YAML says:"
+echo "    container:"
+echo "      image: company/go-builder:latest"
+echo ""
+echo "  What everyone assumes:"
+echo "    • golang:1.22-alpine base image"
+echo "    • Standard Go toolchain, nothing else"
+echo ""
+echo "  What the image actually contains:"
+echo ""
+
+# Show filesystem differences from official golang:1.22-alpine
+echo "  ── Files added vs golang:1.22-alpine ──────────────────────────"
+docker run --rm --entrypoint sh company/go-builder:latest \
+    -c "ls -la /opt/.builder/ 2>/dev/null && ls -la /usr/local/go/bin/"
+echo ""
+
+echo "  ── /usr/local/go/bin/go (the 'go' command) ────────────────────"
+docker run --rm --entrypoint cat company/go-builder:latest /usr/local/go/bin/go
+echo ""
+echo "  ────────────────────────────────────────────────────────────────"
+echo ""
+
+echo "  ── /opt/.builder/hook.go (the payload — never in the repo) ────"
+docker run --rm --entrypoint cat company/go-builder:latest /opt/.builder/hook.go
+echo ""
+echo "  ────────────────────────────────────────────────────────────────"
+echo ""
+
+echo "  ATTACK CHAIN:"
+echo "    1. Attacker compromises or publishes company/go-builder:latest"
+echo "    2. CI job pulls the image (tag = mutable, no digest pin)"
+echo "    3. go build runs → wrapper copies hook.go into source dir"
+echo "    4. Real go binary compiles main.go + hook.go together"
+echo "    5. Wrapper deletes hook.go — source tree is pristine again"
+echo "    6. Backdoored binary uploaded as CI artifact"
+echo "    7. Deployed to production"
+echo ""
+echo "  What was visible to humans:"
+echo "    PR diff:      CLEAN"
+echo "    SAST output:  PASSED"
+echo "    Git log:      CLEAN"
+echo "    CI logs:      'go build -o server .'  ← looks normal"
+echo ""
+echo "  DEFENCES:"
+echo "    ✓ Pin to digest:  image: golang@sha256:1699c10..."
+echo "    ✓ Cosign verify before pull"
+echo "    ✓ Reproducible builds — hash the artifact, compare to trusted build"
+echo "    ✓ SLSA L3+ provenance with platform attestation"
+echo "    ✓ Image scanning: trivy image company/go-builder:latest"
+echo "    ✓ Read-only bind mounts in build containers"
+echo ""

